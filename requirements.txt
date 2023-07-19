@@ -1,0 +1,6 @@
+pandas
+tqdm
+pycocotools
+albumentations
+torch
+segmentation-models-pytorch
