@@ -24,7 +24,7 @@ if __name__ == "__main__":
     )
     mm = HierTextModelModule(**vars(args))
     early_stopping_cb = EarlyStoppingCallback(
-        patience=2, monitor="val_loss", mode="min"
+        patience=5, monitor="val_loss", mode="min"
     )
-    mm.fit(dm, args.epochs, callbacks=[early_stopping_cb])
+    mm.fit(dm, args.epochs, callbacks_=[early_stopping_cb])
     mm.save_weights("best.pth")

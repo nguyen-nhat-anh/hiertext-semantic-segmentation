@@ -3,10 +3,11 @@ import segmentation_models_pytorch as smp
 import torch
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
+from typing import List
 
-from src.callback import Callbacks
+from src.callback import Callbacks, Callback
 from src.dataset import DataBatch, HierTextDataModule
-from src.utils import MeterDict
+from src.utils import MeterDict, logger
 
 
 class HierTextModelModule:
@@ -108,15 +109,18 @@ class HierTextModelModule:
         loss_avg = summary_loss.avg
         return loss_avg
 
-    def fit(self, data_module: HierTextDataModule, epochs, callbacks):
+    def fit(
+        self, data_module: HierTextDataModule, epochs: int, callbacks_: List[Callback]
+    ):
         train_loader = data_module.train_dataloader()
         val_loader = data_module.val_dataloader()
         self.configure(steps_per_epoch=len(train_loader))
-        callbacks = Callbacks(callbacks)
+        callbacks = Callbacks(callbacks_)
         callbacks.set_model_module(self)
         callbacks.on_train_begin()
         for epoch in range(1, epochs + 1):
-            print("# Epoch {}/{}: #".format(epoch, epochs))
+            callbacks.on_epoch_begin(epoch=epoch)
+            logger.info("# Epoch {}/{}: #".format(epoch, epochs))
             train_loss = self.training_epoch(train_loader)
             val_loss = self.validation_epoch(val_loader)
             callbacks.on_epoch_end(epoch=epoch, logs={"val_loss": val_loss["loss"]})

@@ -1,4 +1,25 @@
+import logging
 from collections import defaultdict
+
+
+def get_logger() -> logging.Logger:
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    # formatter = logging.Formatter(
+    #     fmt="%(levelname)s %(asctime)s [%(filename)s:%(funcName)s:%(lineno)d]%(message)s",
+    #     datefmt="%m/%d/%Y %I:%M:%S %p",
+    # )
+    formatter = logging.Formatter(
+        fmt="%(message)s",
+    )
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
+    return logger
+
+
+logger = get_logger()
 
 
 class MeterDict:
