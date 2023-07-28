@@ -1,6 +1,7 @@
 import argparse
 from src.dataset import HierTextDataModule
-from src.trainer import HierTextModelModule
+from src.model import HierTextModelModule
+from src.trainer import HierTextTrainer
 from src.callback import EarlyStoppingCallback
 
 if __name__ == "__main__":
@@ -11,8 +12,12 @@ if __name__ == "__main__":
     parser.add_argument("--image_size", type=int)
     parser.add_argument("--batch_size", type=int)
     parser.add_argument("--num_workers", type=int)
-    parser = HierTextModelModule.add_model_specific_args(parser)
-    parser = HierTextModelModule.add_trainer_specific_args(parser)
+    parser.add_argument("--strategy", type=str, help="single_device or ddp")
+    parser.add_argument("--devices", nargs="+", type=int)
+    parser.add_argument("--epochs", type=int)
+    parser.add_argument("--amp", action="store_true")
+    parser.add_argument("--lr", type=float)
+    parser.add_argument("--ckpt_path", type=str)
     args = parser.parse_args()
 
     dm = HierTextDataModule(
@@ -22,9 +27,16 @@ if __name__ == "__main__":
         args.batch_size,
         args.num_workers,
     )
-    mm = HierTextModelModule(**vars(args))
+    mm = HierTextModelModule(args.encoder_name)
     early_stopping_cb = EarlyStoppingCallback(
         patience=5, monitor="val_loss", mode="min"
     )
-    mm.fit(dm, args.epochs, callbacks_=[early_stopping_cb])
-    mm.save_weights("best.pth")
+    trainer = HierTextTrainer(
+        strategy=args.strategy,
+        devices=args.devices,
+        callbacks=[early_stopping_cb],
+        epochs=args.epochs,
+        amp=args.amp,
+        lr=args.lr,
+    )
+    trainer.fit(mm, dm, args.ckpt_path)

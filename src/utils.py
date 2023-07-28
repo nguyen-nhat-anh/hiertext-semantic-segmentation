@@ -1,5 +1,11 @@
+from __future__ import annotations
+import torch
 import logging
 from collections import defaultdict
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.strategy import Strategy
 
 
 def get_logger() -> logging.Logger:
@@ -44,6 +50,10 @@ class MeterDict:
     def update(self, key, val, n=1):
         self.meter_dict[key].update(val, n)
 
+    def reduce(self, strategy: Strategy):
+        for k, v in self.meter_dict.items():
+            v.reduce(strategy)
+
     def __repr__(self):
         str_format = "{:<20} {}"
         str_repr = [str_format.format(f"({k})", v) for k, v in self.meter_dict.items()]
@@ -66,6 +76,15 @@ class AverageMeter:
         self.val = val
         self.sum += val * n
         self.count += n
+        self.avg = self.sum / self.count
+
+    def reduce(self, strategy: Strategy):
+        sum_tensor = torch.tensor(self.sum, dtype=torch.float32)
+        count_tensor = torch.tensor(self.count, dtype=torch.int64)
+        sum_tensor = strategy.reduce(sum_tensor)
+        count_tensor = strategy.reduce(count_tensor)
+        self.sum = sum_tensor.item()
+        self.count = count_tensor.item()
         self.avg = self.sum / self.count
 
     def __repr__(self):

@@ -1,51 +1,54 @@
-import argparse
 import segmentation_models_pytorch as smp
 import torch
 from torch.utils.data import DataLoader
+from torch.nn.parallel import DistributedDataParallel
 from tqdm.auto import tqdm
-from typing import List, Dict
+from typing import List
 
 from src.callback import Callbacks, Callback
-from src.dataset import DataBatch, HierTextDataModule
-from src.utils import MeterDict, logger
+from src.dataset import HierTextDataModule
+from src.utils import MeterDict
+from src.model import HierTextModelModule
+from src.strategy import (
+    Strategy,
+    DDPStrategy,
+    SingleDeviceStrategy,
+    rank_zero_info,
+    is_rank_zero,
+    rank_zero_only,
+)
 
 
-class HierTextModelModule:
-    categories = ["paragraph", "line", "word"]
-
-    def __init__(self, encoder_name, device, lr, amp, batch_size, epochs, **kwargs):
-        self.device = (
-            torch.device(f"cuda:{device}")
-            if torch.cuda.is_available()
-            else torch.device("cpu")
-        )
-        self.model = smp.Unet(
-            encoder_name=encoder_name,
-            encoder_weights="imagenet",
-            in_channels=3,
-            classes=len(self.categories),
-        ).to(self.device)
-        self.lr = lr
-        self.amp = amp if torch.cuda.is_available() else False
-        self.batch_size = batch_size
+class HierTextTrainer:
+    def __init__(
+        self,
+        strategy: str,
+        devices: List[int],
+        callbacks: List[Callback],
+        epochs: int,
+        amp: bool,
+        lr: float,
+    ):
+        self.strategy: Strategy
+        if strategy == "single_device":
+            self.strategy = SingleDeviceStrategy(devices[0])
+        elif strategy == "ddp":
+            self.strategy = DDPStrategy(devices)
+        else:
+            self.strategy = SingleDeviceStrategy(devices[0])
+        self.callbacks = Callbacks(callbacks)
         self.epochs = epochs
-        self.loss_fn = smp.losses.DiceLoss(mode="multilabel")
-
+        self.amp = amp
+        self.lr = lr
+        self.use_distributed_sampler = strategy == "ddp"
         self.optimizer = None
         self.scheduler = None
         self.scaler = None
         self.stop_training = None  # for early stopping
 
-    def save_weights(self, weights_path):
-        torch.save(self.model.state_dict(), weights_path)
-
-    def load_weights(self, weights_path):
-        weights = torch.load(weights_path, map_location=self.device)
-        self.model.load_state_dict(weights)
-
-    def configure(self, steps_per_epoch):
+    def configure(self, model: HierTextModelModule, steps_per_epoch: int):
         self.optimizer = torch.optim.Adam(
-            [p for p in self.model.parameters() if p.requires_grad], lr=self.lr
+            [p for p in model.parameters() if p.requires_grad], lr=self.lr
         )
         self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
             self.optimizer,
@@ -58,28 +61,17 @@ class HierTextModelModule:
             enabled=self.amp
         )  # for mixed precision training
 
-    def training_step(self, batch: DataBatch, batch_idx) -> Dict[str, torch.Tensor]:
-        images = batch["image"].to(self.device)
-        targets = batch["mask"].to(self.device)
-        with torch.cuda.amp.autocast(enabled=self.amp):
-            outputs = self.model(images)
-            loss = self.loss_fn(outputs, targets)
-        return dict(outputs=outputs, loss=loss, images=images, targets=targets)
-
-    def validation_step(self, batch: DataBatch, batch_idx) -> Dict[str, torch.Tensor]:
-        images = batch["image"].to(self.device)
-        targets = batch["mask"].to(self.device)
-        outputs = self.model(images)
-        loss = self.loss_fn(outputs, targets)
-        return dict(outputs=outputs, loss=loss, images=images, targets=targets)
-
-    def training_epoch(self, loader: DataLoader):
-        self.model.train()
+    def training_epoch(
+        self, model: HierTextModelModule, loader: DataLoader
+    ) -> MeterDict:
+        model.train()
         summaries = MeterDict()
-        pbar = tqdm(enumerate(loader), total=len(loader))
+        pbar = tqdm(enumerate(loader), total=len(loader), disable=not is_rank_zero())
         for step, batch in pbar:
-            result = self.training_step(batch, step)
-            loss, targets = result["loss"], result["targets"]
+            batch = self.strategy.batch_to_device(batch)
+            with torch.cuda.amp.autocast(enabled=self.amp):
+                result = model.training_step(batch, step)
+                loss, targets = result["loss"], result["targets"]
             # backpropagation
             self.optimizer.zero_grad()
             if self.amp:
@@ -97,16 +89,19 @@ class HierTextModelModule:
             summaries.update("loss", loss.item(), batch_size)
             lr = self.optimizer.param_groups[0]["lr"]
             pbar.set_postfix(lr=lr, **summaries.avg)
-        summaries_avg = summaries.avg
-        return summaries_avg
+        summaries.reduce(self.strategy)
+        return summaries
 
     @torch.inference_mode()
-    def validation_epoch(self, loader: DataLoader):
-        self.model.eval()
+    def validation_epoch(
+        self, model: HierTextModelModule, loader: DataLoader
+    ) -> MeterDict:
+        model.eval()
         summaries = MeterDict()
-        pbar = tqdm(enumerate(loader), total=len(loader))
+        pbar = tqdm(enumerate(loader), total=len(loader), disable=not is_rank_zero())
         for step, batch in pbar:
-            result = self.validation_step(batch, step)
+            batch = self.strategy.batch_to_device(batch)
+            result = model.validation_step(batch, step)
             outputs, loss, targets = (
                 result["outputs"],
                 result["loss"],
@@ -122,44 +117,61 @@ class HierTextModelModule:
             ).mean(axis=0)
             batch_size = targets.size(0)
             summaries.update("loss", loss.item(), batch_size)
-            for cat, iou in zip(self.categories, iou_per_class):
+            for cat, iou in zip(model.categories, iou_per_class):
                 summaries.update(f"{cat}_iou", iou.item(), batch_size)
-            summaries.update(f"macro_avg_iou", iou_per_class.mean().item(), batch_size)
+            summaries.update("macro_avg_iou", iou_per_class.mean().item(), batch_size)
             pbar.set_postfix(**summaries.avg)
-        summaries_avg = summaries.avg
-        return summaries_avg
+        summaries.reduce(self.strategy)
+        return summaries
 
     def fit(
-        self, data_module: HierTextDataModule, epochs: int, callbacks_: List[Callback]
+        self,
+        model: HierTextModelModule,
+        data_module: HierTextDataModule,
+        ckpt_path: str,
     ):
-        train_loader = data_module.train_dataloader()
-        val_loader = data_module.val_dataloader()
-        self.configure(steps_per_epoch=len(train_loader))
-        callbacks = Callbacks(callbacks_)
-        callbacks.set_model_module(self)
-        callbacks.on_train_begin()
-        for epoch in range(1, epochs + 1):
-            callbacks.on_epoch_begin(epoch=epoch)
-            logger.info("# Epoch {}/{}: #".format(epoch, epochs))
-            train_summaries = self.training_epoch(train_loader)
-            val_summaries = self.validation_epoch(val_loader)
-            callbacks.on_epoch_end(
-                epoch=epoch, logs={"val_loss": val_summaries["loss"]}
+        # attach model to strategy
+        self.strategy.connect(model)
+        # setup cuda device and initialize process group
+        self.strategy.setup_environment()
+        # configure model and move it to the device
+        self.strategy.setup()
+        # get dataloaders
+        train_loader = data_module.train_dataloader(self.use_distributed_sampler)
+        val_loader = data_module.val_dataloader(self.use_distributed_sampler)
+        self.configure(model, steps_per_epoch=len(train_loader))
+        self.callbacks.setup(self, model)
+        self.callbacks.on_train_begin()
+        for epoch in range(1, self.epochs + 1):
+            self.callbacks.on_epoch_begin(epoch=epoch)
+            rank_zero_info("# Epoch {}/{}: #".format(epoch, self.epochs))
+            train_summaries = self.training_epoch(model, train_loader)
+            val_summaries = self.validation_epoch(model, val_loader)
+            message = (
+                "Train loss {:.4f}\nVal loss {:.4f}\nMacro average IOU {:.4f}\n".format(
+                    train_summaries.avg["loss"],
+                    val_summaries.avg["loss"],
+                    val_summaries.avg["macro_avg_iou"],
+                )
+            )
+            message += "\n".join(
+                [
+                    " {} IOU {:.4f}".format(cat, val_summaries.avg[f"{cat}_iou"])
+                    for cat in model.categories
+                ]
+            )
+            rank_zero_info(message)
+            self.callbacks.on_epoch_end(
+                epoch=epoch, logs={"val_loss": val_summaries.avg["loss"]}
             )
             if self.stop_training:
                 break
-        callbacks.on_train_end()
+        self.callbacks.on_train_end()
+        self.save_weights(model, ckpt_path)
 
-    @staticmethod
-    def add_model_specific_args(parent_parser):
-        parser = argparse.ArgumentParser(parents=[parent_parser], add_help=False)
-        parser.add_argument("--lr", type=float)
-        return parser
-
-    @staticmethod
-    def add_trainer_specific_args(parent_parser):
-        parser = argparse.ArgumentParser(parents=[parent_parser], add_help=False)
-        parser.add_argument("--device", type=int)
-        parser.add_argument("--amp", action="store_true")
-        parser.add_argument("--epochs", type=int)
-        return parser
+    @rank_zero_only
+    def save_weights(self, model, ckpt_path):
+        if isinstance(model, DistributedDataParallel):
+            torch.save(model.module.state_dict(), ckpt_path)
+        else:
+            torch.save(model.state_dict(), ckpt_path)

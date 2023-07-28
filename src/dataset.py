@@ -7,6 +7,7 @@ from albumentations.pytorch import ToTensorV2
 from PIL import Image
 from pathlib import Path
 from torch.utils.data import Dataset, DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from pycocotools import mask as coco_mask
 from typing import List, TypedDict
 
@@ -79,30 +80,36 @@ class HierTextDataModule:
         self.train_transform = A.Compose(augment_transform + postprocess_transform)
         self.val_transform = A.Compose(postprocess_transform)
 
-    def train_dataloader(self):
+    def train_dataloader(self, use_distributed_sampler):
         train_ds = HierTextDataset(
             image_dir=str(Path(self.dataset_dir) / "train"),
             label_path=str(Path(self.label_dir) / "train.csv"),
             transform=self.train_transform,
         )
+        shuffle = False if use_distributed_sampler else True
+        sampler = DistributedSampler(train_ds) if use_distributed_sampler else None
         return DataLoader(
             train_ds,
             batch_size=self.batch_size,
-            shuffle=True,
+            shuffle=shuffle,
             num_workers=self.num_workers,
             pin_memory=False,
+            sampler=sampler,
         )
 
-    def val_dataloader(self):
+    def val_dataloader(self, use_distributed_sampler):
         val_ds = HierTextDataset(
             image_dir=str(Path(self.dataset_dir) / "validation"),
             label_path=str(Path(self.label_dir) / "validation.csv"),
             transform=self.val_transform,
         )
+        shuffle = False
+        sampler = DistributedSampler(val_ds) if use_distributed_sampler else None
         return DataLoader(
             val_ds,
             batch_size=self.batch_size,
-            shuffle=False,
+            shuffle=shuffle,
             num_workers=self.num_workers,
             pin_memory=False,
+            sampler=sampler,
         )
