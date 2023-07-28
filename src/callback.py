@@ -10,54 +10,80 @@ if TYPE_CHECKING:
 
 
 class Callback:
+    """Base class used to build new callbacks"""
+
     def __init__(self):
         self.trainer = None
         self.model_module = None
 
     def setup(self, trainer: HierTextTrainer, model_module: HierTextModelModule):
+        """Connect callback to trainer and model
+
+        Args:
+            trainer (HierTextTrainer): trainer to connect
+            model_module (HierTextModelModule): model to connect
+        """
         self.trainer = trainer
         self.model_module = model_module
 
     def on_train_begin(self, **kwargs):
+        """Called when training begins"""
         pass
 
     def on_train_end(self, **kwargs):
+        """Called when training ends"""
         pass
 
     def on_epoch_begin(self, **kwargs):
+        """Called at the start of each epoch"""
         pass
 
     def on_epoch_end(self, **kwargs):
+        """Called at the end of each epoch"""
         pass
 
 
 class Callbacks:
+    """A class that represents a list of callbacks"""
+
     def __init__(self, callbacks: List[Callback]):
         self.callbacks = callbacks
 
     def setup(self, trainer: HierTextTrainer, model_module: HierTextModelModule):
+        """Setup every callback
+
+        Args:
+            trainer (HierTextTrainer): trainer to connect
+            model_module (HierTextModelModule): model to connect
+        """
         for callback in self.callbacks:
             callback.setup(trainer, model_module)
 
     def on_train_begin(self, **kwargs):
+        """Called when training begins"""
         for callback in self.callbacks:
             callback.on_train_begin(**kwargs)
 
     def on_train_end(self, **kwargs):
+        """Called when training ends"""
         for callback in self.callbacks:
             callback.on_train_end(**kwargs)
 
     def on_epoch_begin(self, **kwargs):
+        """Called at the start of each epoch"""
         for callback in self.callbacks:
             callback.on_epoch_begin(**kwargs)
 
     def on_epoch_end(self, **kwargs):
+        """Called at the end of each epoch"""
         for callback in self.callbacks:
             callback.on_epoch_end(**kwargs)
 
 
 class EarlyStoppingCallback(Callback):
-    def __init__(self, patience=1, monitor="val_loss", mode="min"):
+    """Monitor a metric and stop training when it stops improving."""
+
+    def __init__(self, patience: int = 1, monitor: str = "val_loss", mode: str = "min"):
         super().__init__()
         self.patience = patience
         self.monitor = monitor
@@ -76,7 +102,7 @@ class EarlyStoppingCallback(Callback):
         self.best_state_dict = None
         self.wait = 0
 
-    def on_epoch_end(self, epoch, logs, **kwargs):
+    def on_epoch_end(self, epoch: int, logs, **kwargs):
         current = logs.get(self.monitor)
         self.wait += 1
         if self.is_improvement(current, self.best):

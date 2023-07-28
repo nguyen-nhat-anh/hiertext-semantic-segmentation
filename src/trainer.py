@@ -1,9 +1,10 @@
 import segmentation_models_pytorch as smp
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.nn.parallel import DistributedDataParallel
 from tqdm.auto import tqdm
-from typing import List
+from typing import List, Union
 
 from src.callback import Callbacks, Callback
 from src.dataset import HierTextDataModule
@@ -20,6 +21,8 @@ from src.strategy import (
 
 
 class HierTextTrainer:
+    """Customize every aspect of training"""
+
     def __init__(
         self,
         strategy: str,
@@ -47,6 +50,12 @@ class HierTextTrainer:
         self.stop_training = None  # for early stopping
 
     def configure(self, model: HierTextModelModule, steps_per_epoch: int):
+        """Configure optimizer, scheduler, grad scaler
+
+        Args:
+            model (HierTextModelModule): model module
+            steps_per_epoch (int): number of steps per epoch
+        """
         self.optimizer = torch.optim.Adam(
             [p for p in model.parameters() if p.requires_grad], lr=self.lr
         )
@@ -64,6 +73,15 @@ class HierTextTrainer:
     def training_epoch(
         self, model: HierTextModelModule, loader: DataLoader
     ) -> MeterDict:
+        """Train one epoch
+
+        Args:
+            model (HierTextModelModule): model module
+            loader (DataLoader): data loader
+
+        Returns:
+            MeterDict: train summaries
+        """
         model.train()
         summaries = MeterDict()
         pbar = tqdm(enumerate(loader), total=len(loader), disable=not is_rank_zero())
@@ -96,6 +114,15 @@ class HierTextTrainer:
     def validation_epoch(
         self, model: HierTextModelModule, loader: DataLoader
     ) -> MeterDict:
+        """Validate one epoch
+
+        Args:
+            model (HierTextModelModule): model module
+            loader (DataLoader): data loader
+
+        Returns:
+            MeterDict: validation summaries
+        """
         model.eval()
         summaries = MeterDict()
         pbar = tqdm(enumerate(loader), total=len(loader), disable=not is_rank_zero())
@@ -130,6 +157,13 @@ class HierTextTrainer:
         data_module: HierTextDataModule,
         ckpt_path: str,
     ):
+        """Runs the full optimization routine
+
+        Args:
+            model (HierTextModelModule): model to fit
+            data_module (HierTextDataModule): input data module
+            ckpt_path (str): checkpoint save path
+        """
         # attach model to strategy
         self.strategy.connect(model)
         # setup cuda device and initialize process group
@@ -170,7 +204,15 @@ class HierTextTrainer:
         self.save_weights(model, ckpt_path)
 
     @rank_zero_only
-    def save_weights(self, model, ckpt_path):
+    def save_weights(
+        self, model: Union[nn.Module, DistributedDataParallel], ckpt_path: str
+    ):
+        """Save model weights to checkpoint path
+
+        Args:
+            model (Union[nn.Module, DistributedDataParallel]): model to save
+            ckpt_path (str): checkpoint path
+        """
         if isinstance(model, DistributedDataParallel):
             torch.save(model.module.state_dict(), ckpt_path)
         else:

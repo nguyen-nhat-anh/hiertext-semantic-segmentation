@@ -29,6 +29,8 @@ logger = get_logger()
 
 
 class MeterDict:
+    """Dictionary of meters"""
+
     def __init__(self):
         self.meter_dict = defaultdict(lambda: AverageMeter())
 
@@ -51,6 +53,11 @@ class MeterDict:
         self.meter_dict[key].update(val, n)
 
     def reduce(self, strategy: Strategy):
+        """Reduce stats (sum, count, avg) across processes for each meter
+
+        Args:
+            strategy (Strategy): strategy used
+        """
         for k, v in self.meter_dict.items():
             v.reduce(strategy)
 
@@ -79,6 +86,11 @@ class AverageMeter:
         self.avg = self.sum / self.count
 
     def reduce(self, strategy: Strategy):
+        """Reduce stats (sum, count, avg) across processes
+
+        Args:
+            strategy (Strategy): strategy used
+        """
         sum_tensor = torch.tensor(self.sum, dtype=torch.float32)
         count_tensor = torch.tensor(self.count, dtype=torch.int64)
         sum_tensor = strategy.reduce(sum_tensor)

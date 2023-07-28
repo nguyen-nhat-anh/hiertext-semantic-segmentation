@@ -9,7 +9,7 @@ from pathlib import Path
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from pycocotools import mask as coco_mask
-from typing import List, TypedDict
+from typing import List, Dict, TypedDict, Callable, Optional
 
 
 class DataBatch(TypedDict):
@@ -25,9 +25,13 @@ class DataBatch(TypedDict):
 
 
 class HierTextDataset(Dataset):
+    """A class represents hiertext dataset"""
+
     categories = ["paragraph", "line", "word"]
 
-    def __init__(self, image_dir, label_path, transform=None):
+    def __init__(
+        self, image_dir: str, label_path: str, transform: Optional[Callable] = None
+    ):
         self.image_dir = image_dir
         self.label_df = pd.read_csv(label_path)
         self.transform = transform
@@ -35,7 +39,7 @@ class HierTextDataset(Dataset):
     def __len__(self):
         return len(self.label_df)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Dict:
         row = self.label_df.iloc[idx]
         image_id, h, w = row["image_id"], row["height"], row["width"]
         image = Image.open(str(Path(self.image_dir) / f"{image_id}.jpg"))
@@ -52,7 +56,16 @@ class HierTextDataset(Dataset):
 
 
 class HierTextDataModule:
-    def __init__(self, dataset_dir, label_dir, image_size, batch_size, num_workers):
+    """Handle transform, data loader, sampler, etc."""
+
+    def __init__(
+        self,
+        dataset_dir: str,
+        label_dir: str,
+        image_size: int,
+        batch_size: int,
+        num_workers: int,
+    ):
         self.dataset_dir = dataset_dir
         self.label_dir = label_dir
         self.batch_size = batch_size
@@ -80,7 +93,15 @@ class HierTextDataModule:
         self.train_transform = A.Compose(augment_transform + postprocess_transform)
         self.val_transform = A.Compose(postprocess_transform)
 
-    def train_dataloader(self, use_distributed_sampler):
+    def train_dataloader(self, use_distributed_sampler: bool) -> DataLoader:
+        """Get train dataloader
+
+        Args:
+            use_distributed_sampler (bool): use distributed sampler or not (for distributed data parallel)
+
+        Returns:
+            DataLoader: train dataloader
+        """
         train_ds = HierTextDataset(
             image_dir=str(Path(self.dataset_dir) / "train"),
             label_path=str(Path(self.label_dir) / "train.csv"),
@@ -97,7 +118,15 @@ class HierTextDataModule:
             sampler=sampler,
         )
 
-    def val_dataloader(self, use_distributed_sampler):
+    def val_dataloader(self, use_distributed_sampler: bool) -> DataLoader:
+        """Get validation dataloader
+
+        Args:
+            use_distributed_sampler (bool): use distributed sampler or not (for distributed data parallel)
+
+        Returns:
+            DataLoader: validation dataloader
+        """
         val_ds = HierTextDataset(
             image_dir=str(Path(self.dataset_dir) / "validation"),
             label_path=str(Path(self.label_dir) / "validation.csv"),

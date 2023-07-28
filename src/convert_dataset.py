@@ -5,9 +5,18 @@ import pandas as pd
 from pathlib import Path
 from tqdm.auto import tqdm
 from pycocotools import mask as coco_mask
+from typing import Dict
 
 
-def load_annotation(ann):
+def load_annotation(ann: Dict) -> Dict:
+    """Parse hiertext annotation
+
+    Args:
+        ann (Dict): hiertext annotation
+
+    Returns:
+        Dict: parsed annotation. Keys: image_id, width, height, labels, segments, iscrowds
+    """
     labels, segments, iscrowds = [], [], []
     for p in ann["paragraphs"]:
         labels.append("paragraph")
@@ -31,7 +40,15 @@ def load_annotation(ann):
     )
 
 
-def convert_rle(sample):
+def convert_rle(sample: Dict) -> Dict:
+    """Convert polygon segment annotation to RLE format
+
+    Args:
+        sample (Dict): segment annotation. Keys: image_id, width, height, labels, segments, iscrowds
+
+    Returns:
+        Dict: RLE annotation. Keys: image_id, height, width, paragraph, line, word
+    """
     image_id, height, width = sample["image_id"], sample["height"], sample["width"]
     result = dict(image_id=image_id, height=height, width=width)
     for category in ["paragraph", "line", "word"]:
